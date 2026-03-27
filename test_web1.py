@@ -2,32 +2,29 @@ import streamlit as st
 import fitz  # PyMuPDF
 import pandas as pd
 import io
+import re
 
-st.set_page_config(page_title="Extracteur de données fichiers Service", page_icon="🔍")
+st.set_page_config(page_title="Extracteur Service (CSV Tab)", page_icon="📝")
 
-st.title("🔍 Extracteur PDF de données fichiers Service")
-st.write("Extraction spécifique : Serial Number, Customer, Location, Date.")
+# --- FONCTION DE RECHERCHE DANS LE TEXTE BRUT ---
+def chercher_dans_texte(texte, mot_cle):
+    # Cherche le mot clé et récupère ce qui suit sur la même ligne
+    pattern = rf"{mot_cle}[:\s=]*(.*)"
+    match = re.search(pattern, texte, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
 
-# --- CONFIGURATION : Modifie les noms ci-dessous pour qu'ils correspondent EXACTEMENT aux noms dans ton PDF ---
+st.title("📝 Extracteur Service vers CSV")
+st.write("Format de sortie : CSV avec séparateur TABULATION (idéal pour copier-coller dans Excel).")
+
+# --- TA CONFIGURATION ---
 CHAMPS_A_GARDER = [
-    "serial number",
-    "MODEL NO", 
-    "SYMPTOMS",
-    "Problems Reported 1",
-    "Problems Reported 2",
-    "Work A", 
-    "Work B", 
-    "Work C",
-    "Work 1",
-    "Work 2", 
-    "WORK PERFORMED", 
-    "CUSTOMER",
-    "location",
-    "Serial #",
-    "DATE RECEIVED"
-    
+    "serial number", "MODEL NO", "SYMPTOMS", "Problems Reported 1",
+    "Problems Reported 2", "Work A", "Work B", "Work C",
+    "Work 1", "Work 2", "WORK PERFORMED", "CUSTOMER",
+    "location", "Serial #", "DATE RECEIVED"
 ]
-# -------------------------------------------------------------------------------------------------------
 
 fichiers_uploades = st.file_uploader(
     "Choisir les formulaires PDF", 
@@ -41,19 +38,26 @@ if fichiers_uploades:
     for fichier in fichiers_uploades:
         try:
             doc = fitz.open(stream=fichier.read(), filetype="pdf")
+            infos = {"Nom_Fichier": fichier.name}
             
-            # On commence par noter le nom du fichier
-            infos_filtrees = {"Nom_Fichier": fichier.name}
+            # 1. Texte brut pour les PDF sans formulaire
+            texte_complet = "\n".join([page.get_text() for page in doc])
             
-            # Extraction des champs
+            # 2. Extraction par formulaire (Widgets)
             for page in doc:
                 for widget in page.widgets():
                     nom_brut = widget.field_name
-                    # On vérifie si ce champ fait partie de notre liste (en minuscules pour éviter les erreurs)
                     if nom_brut.lower() in [c.lower() for c in CHAMPS_A_GARDER]:
-                        infos_filtrees[nom_brut] = widget.field_value
+                        infos[nom_brut] = widget.field_value
+
+            # 3. Recherche textuelle pour les champs manquants
+            for champ in CHAMPS_A_GARDER:
+                if champ not in infos or not infos[champ]:
+                    valeur_detectee = chercher_dans_texte(texte_complet, champ)
+                    if valeur_detectee:
+                        infos[champ] = valeur_detectee
             
-            toutes_les_donnees.append(infos_filtrees)
+            toutes_les_donnees.append(infos)
             
         except Exception as e:
             st.error(f"Erreur sur le fichier {fichier.name} : {e}")
@@ -61,22 +65,20 @@ if fichiers_uploades:
     if toutes_les_donnees:
         df_final = pd.DataFrame(toutes_les_donnees)
         
-        # Optionnel : On réorganise les colonnes pour qu'elles soient dans l'ordre voulu
-        # (Seulement si les colonnes existent dans le DataFrame)
+        # Réorganisation des colonnes
         colonnes_presentes = [c for c in df_final.columns if c != "Nom_Fichier"]
         df_final = df_final[["Nom_Fichier"] + colonnes_presentes]
 
         st.success(f"✅ Analyse terminée sur {len(toutes_les_donnees)} fichiers.")
         st.dataframe(df_final)
         
-        # Préparation Excel
-        tampon_excel = io.BytesIO()
-        with pd.ExcelWriter(tampon_excel, engine='openpyxl') as writer:
-            df_final.to_excel(writer, index=False)
+        # --- PRÉPARATION DU CSV (SÉPARATEUR TABULATION) ---
+        # On utilise l'encodage utf-16 pour une compatibilité parfaite avec Excel en double-clic
+        csv_tab = df_final.to_csv(index=False, sep='\t', encoding='utf-16')
         
         st.download_button(
-            label="📥 Télécharger l'Excel filtré",
-            data=tampon_excel.getvalue(),
-            file_name="extraction_ciblee.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="📥 Télécharger le fichier CSV (Tabulation)",
+            data=csv_tab,
+            file_name="extraction_service.csv",
+            mime="text/csv"
         )
